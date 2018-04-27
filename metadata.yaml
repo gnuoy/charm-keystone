@@ -39,6 +39,8 @@ requires:
   domain-backend:
     interface: keystone-domain-backend
     scope: container
+  certificates:
+    interface: tls-certificates
 peers:
   cluster:
     interface: keystone-ha

@@ -1880,3 +1880,40 @@ class EnsureDirContext(OSContextGenerator):
     def __call__(self):
         mkdir(self.dirname)
         return {}
+
+class ApacheVaultSSLContext(ApacheSSLContext):
+
+    interfaces = ['https']
+    external_ports = []
+
+    def __call__(self, service_namespace, rel_name='certificates'):
+        ca_found = False
+        for rid in relation_ids(rel_name):
+            for unit in related_units(rid):
+                if relation_get('processed_requests', rid=rid, unit=unit):
+                    ca_found = True
+        if not ca_found:
+            print("CA NOT FOUND")
+            return {}
+        if isinstance(self.external_ports, six.string_types):
+            self.external_ports = [self.external_ports]
+
+        self.enable_modules()
+
+        ctxt = {'namespace': service_namespace,
+                'endpoints': [],
+                'ext_ports': []}
+
+        addresses = self.get_network_addresses()
+        for address, endpoint in addresses:
+            for api_port in self.external_ports:
+                ext_port = determine_apache_port(api_port,
+                                                 singlenode_mode=True)
+                int_port = determine_api_port(api_port, singlenode_mode=True)
+                portmap = (address, endpoint, int(ext_port), int(int_port))
+                ctxt['endpoints'].append(portmap)
+                ctxt['ext_ports'].append(int(ext_port))
+
+        ctxt['ext_ports'] = sorted(list(set(ctxt['ext_ports'])))
+        return ctxt
+

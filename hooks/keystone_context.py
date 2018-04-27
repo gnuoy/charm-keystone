@@ -405,3 +405,14 @@ class TokenFlushContext(context.OSContextGenerator):
             'token_flush': is_elected_leader(DC_RESOURCE_NAME)
         }
         return ctxt
+
+class ApacheVaultSSLContext(context.ApacheVaultSSLContext):
+
+
+    def __call__(self):
+        from keystone_utils import (
+            determine_ports,
+        )
+        self.external_ports = determine_ports()
+        return super(ApacheVaultSSLContext, self).__call__(service_namespace='keystone')
+        

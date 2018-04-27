@@ -39,6 +39,7 @@ from charmhelpers.core.hookenv import (
     related_units,
     status_set,
     open_port,
+    unit_get,
     is_leader,
 )
 
@@ -48,6 +49,7 @@ from charmhelpers.core.host import (
     service_stop,
     service_start,
     service_restart,
+    write_file,
 )
 
 from charmhelpers.core.strutils import (
@@ -146,18 +148,27 @@ from charmhelpers.contrib.peerstorage import (
 from charmhelpers.contrib.openstack.ip import (
     ADMIN,
     resolve_address,
-)
+    INTERNAL,
+    PUBLIC,
+    ADDRESS_MAP)
+
+
 from charmhelpers.contrib.network.ip import (
     get_iface_for_address,
     get_netmask_for_address,
     is_ipv6,
     get_relation_ip,
+    get_hostname,
 )
 from charmhelpers.contrib.openstack.context import ADDRESS_TYPES
 
 from charmhelpers.contrib.charmsupport import nrpe
 
 from charmhelpers.contrib.hardening.harden import harden
+
+from charmhelpers.contrib.hahelpers.apache import (
+    install_ca_cert
+)
 
 hooks = Hooks()
 CONFIGS = register_configs()
@@ -868,6 +879,73 @@ def update_nrpe_config():
     nrpe.add_haproxy_checks(nrpe_setup, current_unit)
     nrpe_setup.write()
 
+class CertRequest(object):
+
+    def __init__(self, service, unit_name):
+        self.service = service
+        self.unit_name = unit_name.replace('/', '_')
+        self.entries = []
+
+    def add_entry(self, net_type, cn, address):
+        key = '{}_{}'.format(net_type, self.service)
+        self.entries.append((key, cn, address))
+
+    def add_hostname_cn(self):
+        ip = unit_get('private-address')
+        self.entries.append((self.unit_name, get_hostname(ip), [ip]))
+
+    def get_request(self):
+            #'cert_requests': {
+        request = {}
+        for entry in self.entries:
+            request[entry[1]] = {
+                'cn': entry[1],
+                'sans': entry[2]}
+        return {'cert_requests': json.dumps(request)}
+
+@hooks.hook('certificates-relation-joined')
+def certs_joined(relation_id=None):
+    req = CertRequest('keystone', local_unit())
+    req.add_hostname_cn()
+    if is_leader():
+        # Add os-hostname entries
+        for net_type in [INTERNAL, ADMIN, PUBLIC]:
+            net_config = config(ADDRESS_MAP[net_type]['override'])
+            if net_config:
+                req.add_entry(
+                    net_type,
+                    net_config,
+                    [resolve_address(endpoint_type=net_type)])
+    relation_set(
+        relation_id=relation_id,
+        relation_settings=req.get_request())
+
+@hooks.hook('certificates-relation-changed')
+def certs_changed(relation_id=None, unit=None):
+    namespace = 'keystone'
+    ssl_dir = os.path.join('/etc/apache2/ssl/', namespace)
+    mkdir(path=ssl_dir)
+    unit_key = local_unit().replace('/', '_')
+    certs = relation_get(attribute='processed_requests', rid=relation_id)
+    chain = relation_get(attribute='chain', rid=relation_id)
+    certs = json.loads(certs)
+    install_ca_cert(relation_get(attribute='ca', rid=relation_id))
+    print("CHAIN: {}".format(chain))
+    for cn, bundle in certs.items():
+        cert_filename = 'cert_{}'.format(cn)
+        key_filename = 'key_{}'.format(cn)
+        cert_data = bundle['cert']
+        if chain:
+            # Append chain file so that clients that trust the root CA will
+            # trust certs signed by an intermediate in the chain
+            cert_data = cert_data + chain
+        write_file(path=os.path.join(ssl_dir, cert_filename),
+            content=cert_data, perms=0o640)
+        write_file(path=os.path.join(ssl_dir, key_filename),
+            content=bundle['key'], perms=0o640)
+    CONFIGS.write_all()
+    service_restart(keystone_service())
+    configure_https()
 
 def main():
     try:

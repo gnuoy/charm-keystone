@@ -281,7 +281,8 @@ BASE_RESOURCE_MAP = OrderedDict([
         'services': ['apache2'],
     }),
     (APACHE_24_CONF, {
-        'contexts': [keystone_context.ApacheSSLContext()],
+        'contexts': [keystone_context.ApacheSSLContext(),
+                     keystone_context.ApacheVaultSSLContext()],
         'services': ['apache2'],
     }),
     (POLICY_JSON, {
